@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ResponsiveContainer,
   LineChart,
@@ -11,6 +11,9 @@ import {
   Legend,
 } from 'recharts'
 import './App.css'
+
+const API_URL = 'http://localhost:5001'
+
 
 const initialMetrics = [
   { name: 'Traffic flow', value: 72, unit: '%', icon: '🚦', color: '#6ee7b7' },
@@ -26,58 +29,211 @@ const districts = [
   { name: 'South District', short: 'SOUTH', left: '76%', top: '72%', color: '#60a5fa' },
 ]
 
-function makeSnapshot(metrics, tick) {
+function formatHistoryRecord(record, index) {
+  const values = Array.isArray(record.metrics) ? record.metrics : []
+
+  const getValue = name =>
+    Number(values.find(metric => metric.name === name)?.value ?? 0)
+
   return {
-    update: tick,
-    time: new Date().toLocaleTimeString(),
-    traffic: metrics[0].value,
-    aqi: metrics[1].value,
-    energy: metrics[2].value,
-    water: metrics[3].value,
+    update: index + 1,
+    time: record.createdAt
+      ? new Date(record.createdAt).toLocaleTimeString()
+      : '—',
+    traffic: getValue('Traffic flow'),
+    aqi: getValue('Air quality'),
+    energy: getValue('Energy usage'),
+    water: getValue('Water reserves'),
   }
 }
 
-function App() {
+function App() { 
+  const [predictions, setPredictions] = useState([]);
+  const [predictionError, setPredictionError] = useState("");
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
   const [metrics, setMetrics] = useState(() =>
     initialMetrics.map(item => ({ ...item }))
   )
-  const [running, setRunning] = useState(true)
-  const [tick, setTick] = useState(0)
-  const [history, setHistory] = useState(() => [
-    makeSnapshot(initialMetrics, 0),
-  ])
+  const [running, setRunning] = useState(false)
+  const [history, setHistory] = useState([])
   const [selectedDistrict, setSelectedDistrict] = useState(null)
   const [activePage, setActivePage] = useState('Overview')
+  const [backendStatus, setBackendStatus] = useState('Checking...')
+  const [backendMessage, setBackendMessage] = useState('')
+  const [lastBackendUpdate, setLastBackendUpdate] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
 
-  const simulate = useCallback(() => {
-    const nextMetrics = metrics.map(item => {
-      const change = Math.floor(Math.random() * 15) - 7
-      const max = item.name === 'Air quality' ? 150 : 100
+  const inFlightRef = useRef(false)
 
-      return {
-        ...item,
-        value: Math.max(5, Math.min(max, item.value + change)),
-      }
-    })
+const predictionInFlightRef = useRef(false)
 
-    const nextTick = tick + 1
+const loadPredictions = useCallback(async () => {
+  if (predictionInFlightRef.current) return
 
-    setMetrics(nextMetrics)
-    setTick(nextTick)
-    setHistory(oldHistory =>
-      [...oldHistory, makeSnapshot(nextMetrics, nextTick)].slice(-30)
+  predictionInFlightRef.current = true
+  setPredictionsLoading(true)
+  setPredictionError('')
+
+  try {
+    const response = await fetch(
+      'http://localhost:5001/api/ai/predictions'
     )
-  }, [metrics, tick])
 
-  const reset = () => {
-    const freshMetrics = initialMetrics.map(item => ({ ...item }))
+    if (!response.ok) {
+      throw new Error(`Request failed: ${response.status}`)
+    }
 
-    setMetrics(freshMetrics)
-    setTick(0)
-    setHistory([makeSnapshot(freshMetrics, 0)])
+    const data = await response.json()
+
+    if (!data.success || !Array.isArray(data.predictions)) {
+      throw new Error('Invalid AI predictions response')
+    }
+
+    setPredictions(data.predictions)
+  } catch (error) {
+    setPredictionError(error.message || 'Could not load AI predictions')
+  } finally {
+    predictionInFlightRef.current = false
+    setPredictionsLoading(false)
+  }
+}, [])
+  const normalizeMetrics = useCallback(serverMetrics => {
+    return initialMetrics.map(item => {
+      const serverMetric = serverMetrics.find(
+        metric => metric.name === item.name
+      )
+
+      return serverMetric
+        ? { ...item, value: Number(serverMetric.value) }
+        : { ...item }
+    })
+  }, [])
+
+  const loadHistory = useCallback(async () => {
+    const response = await fetch(`${API_URL}/api/history`)
+
+    if (!response.ok) {
+      throw new Error(`History request failed (${response.status}).`)
+    }
+
+    const data = await response.json()
+
+    if (!data.success || !Array.isArray(data.history)) {
+      throw new Error('Invalid history response from backend.')
+    }
+
+    // Backend returns newest first; reverse for chronological chart order.
+    setHistory(
+      data.history
+        .slice()
+        .reverse()
+        .map((record, index) => formatHistoryRecord(record, index))
+    )
+  }, [])
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [healthResponse, metricsResponse] = await Promise.all([
+        fetch(`${API_URL}/api/health`),
+        fetch(`${API_URL}/api/metrics`),
+      ])
+
+      if (!healthResponse.ok) {
+        throw new Error(`Health request failed (${healthResponse.status}).`)
+      }
+
+      if (!metricsResponse.ok) {
+        throw new Error(`Metrics request failed (${metricsResponse.status}).`)
+      }
+
+      const health = await healthResponse.json()
+      const metricsData = await metricsResponse.json()
+
+      if (!metricsData.success || !Array.isArray(metricsData.metrics)) {
+        throw new Error('Invalid metrics response from backend.')
+      }
+
+      await loadHistory()
+
+      setMetrics(normalizeMetrics(metricsData.metrics))
+      setBackendStatus(health.status === 'OK' ? 'Connected' : 'Unavailable')
+      setBackendMessage(
+        health.database || health.project || 'Backend responded'
+      )
+      setLastBackendUpdate(metricsData.updatedAt || null)
+      setErrorMessage('')
+    } catch (error) {
+      setBackendStatus('Offline')
+      setBackendMessage('Could not load backend data')
+      setErrorMessage(
+        `Cannot load dashboard data. Ensure the backend is running on port 5001. ${error.message}`
+      )
+    }
+  }, [loadHistory, normalizeMetrics])
+
+  
+
+useEffect(() => {
+  loadDashboard()
+  loadPredictions()
+}, [loadDashboard, loadPredictions])
+
+
+    
+  const simulate = useCallback(async () => {
+    if (inFlightRef.current) return
+
+    inFlightRef.current = true
+    setBusy(true)
+    setErrorMessage('')
+
+    try {
+      const response = await fetch(`${API_URL}/api/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Simulation request failed (${response.status}).`)
+      }
+
+      const data = await response.json()
+
+      if (!data.success || !Array.isArray(data.metrics)) {
+        throw new Error(data.message || 'Invalid simulation response.')
+      }
+
+      setMetrics(normalizeMetrics(data.metrics))
+      setLastBackendUpdate(data.updatedAt || null)
+      setBackendStatus('Connected')
+      setBackendMessage('Simulation saved to database')
+
+      await loadHistory()
+    } catch (error) {
+      setErrorMessage(error.message || 'Simulation failed.')
+    } finally {
+      inFlightRef.current = false
+      setBusy(false)
+    }
+  }, [loadHistory, normalizeMetrics])
+
+  useEffect(() => {
+    if (!running) return undefined
+
+    const timer = window.setInterval(() => {
+      simulate()
+    }, 5000)
+
+    return () => window.clearInterval(timer)
+  }, [running, simulate])
+
+  const reset = async () => {
+    setRunning(false)
     setSelectedDistrict(null)
     setActivePage('Overview')
-    setRunning(true)
+    await loadDashboard()
+    await loadPredictions()
   }
 
   const exportCSV = () => {
@@ -94,47 +250,50 @@ function App() {
 
     const csv = [headers, ...rows]
       .map(row =>
-        row
-          .map(value => `"${String(value).replace(/"/g, '""')}"`)
-          .join(',')
+        row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')
       )
       .join('\r\n')
 
     const blob = new Blob(['\uFEFF' + csv], {
       type: 'text/csv;charset=utf-8;',
     })
+
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
-
     link.href = url
     link.download = 'citypulse-history.csv'
     document.body.appendChild(link)
     link.click()
     link.remove()
-
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  useEffect(() => {
-    if (!running) return undefined
-
-    const timer = setInterval(simulate, 5000)
-    return () => clearInterval(timer)
-  }, [running, simulate])
+  const traffic = Number(
+    metrics.find(metric => metric.name === 'Traffic flow')?.value ?? 0
+  )
+  const aqi = Number(
+    metrics.find(metric => metric.name === 'Air quality')?.value ?? 0
+  )
+  const energy = Number(
+    metrics.find(metric => metric.name === 'Energy usage')?.value ?? 0
+  )
+  const water = Number(
+    metrics.find(metric => metric.name === 'Water reserves')?.value ?? 0
+  )
 
   const alerts = []
 
-  if (metrics[0].value < 40) {
-    alerts.push('Traffic flow is low. Review congestion and signal timing.')
+  if (traffic < 40) {
+    alerts.push('🚦 Traffic flow is low. Review congestion and signal timing.')
   }
-  if (metrics[1].value > 100) {
-    alerts.push('Air quality is poor. Consider pollution-response measures.')
+  if (aqi > 100) {
+    alerts.push('🌿 Air quality is poor. Consider pollution-response measures.')
   }
-  if (metrics[2].value > 85) {
-    alerts.push('Energy demand is high. Review peak-load management.')
+  if (energy > 85) {
+    alerts.push('⚡ Energy demand is high. Review peak-load management.')
   }
-  if (metrics[3].value < 30) {
-    alerts.push('Water reserves are low. Review conservation measures.')
+  if (water < 30) {
+    alerts.push('💧 Water reserves are low. Review conservation measures.')
   }
 
   const pages = [
@@ -195,6 +354,15 @@ function App() {
             <p className="muted">
               Monitor simulated urban conditions and city health.
             </p>
+            <p className="muted">
+              Backend: <strong>{backendStatus}</strong>
+              {backendMessage ? ` · ${backendMessage}` : ''}
+            </p>
+            {lastBackendUpdate && (
+              <p className="muted">
+                API data loaded: {new Date(lastBackendUpdate).toLocaleString()}
+              </p>
+            )}
           </div>
 
           <div className="top-actions">
@@ -202,16 +370,30 @@ function App() {
               <span className="status-dot" />
               {running ? 'SIMULATED LIVE' : 'PAUSED'}
             </span>
-            <button className="reset-btn" onClick={reset}>↻ Reset</button>
+            <button className="reset-btn" onClick={reset}>
+              ↻ Refresh data
+            </button>
           </div>
         </header>
 
-        {alerts.length > 0 && (
-          <section className="panel" role="status">
-            <h2>⚠ City alerts</h2>
-            {alerts.map(alert => <p key={alert}>{alert}</p>)}
+        {errorMessage && (
+          <section className="panel" role="alert">
+            <h2>⚠ Connection notice</h2>
+            <p>{errorMessage}</p>
+            <button className="reset-btn" onClick={loadDashboard}>
+              Retry connection
+            </button>
           </section>
         )}
+
+        <section className="panel" role="status">
+          <h2>⚠ City alerts</h2>
+          {alerts.length > 0 ? (
+            alerts.map(alert => <p key={alert}>{alert}</p>)
+          ) : (
+            <p>✅ All city indicators are within the configured demo thresholds.</p>
+          )}
+        </section>
 
         <section className="welcome-panel">
           <div>
@@ -222,6 +404,7 @@ function App() {
               changing urban conditions.
             </p>
           </div>
+
           <div className="city-art" aria-hidden="true">
             <div className="sun" />
             <div className="building b1" />
@@ -242,8 +425,52 @@ function App() {
             </h2>
             <p className="muted">Key metrics across the urban network</p>
           </div>
-          <span className="updated">UPDATE #{tick}</span>
+          <span className="updated">UPDATES: {history.length}</span>
         </div>
+
+<section className="panel ai-predictions-panel">
+  <div className="panel-heading">
+    <div>
+      <h2>🤖 AI Predictions</h2>
+      <p>Random Forest model · Historical data</p>
+    </div>
+    <button
+      className="reset-btn"
+      onClick={loadPredictions}
+      disabled={predictionsLoading}
+    >
+      {predictionsLoading ? "Loading..." : "Refresh AI"}
+    </button>
+  </div>
+
+  {predictionError && (
+    <p role="alert">{predictionError}</p>
+  )}
+
+  {!predictionError && predictions.length === 0 && (
+    <p>
+      {predictionsLoading
+        ? "Generating predictions..."
+        : "Click Refresh AI to load predictions."}
+    </p>
+  )}
+
+  <div className="metrics-grid">
+    {predictions.map((item) => (
+      <article className="metric-card" key={item.name}>
+        <p className="metric-name">{item.name}</p>
+        <div className="metric-value">
+          {Number.isFinite(Number(item.prediction))
+            ? Number(item.prediction).toFixed(2)
+            : "—"}
+        </div>
+        <p className="metric-foot">
+          {item.model || "AI model"} · {item.readings ?? 0} readings
+        </p>
+      </article>
+    ))}
+  </div>
+</section>
 
         <section className="metrics-grid">
           {visibleMetrics.map((metric, index) => (
@@ -262,13 +489,13 @@ function App() {
                 <div
                   className="progress-fill"
                   style={{
-                    width: `${Math.min(metric.value, 100)}%`,
+                    width: `${Math.min(Math.max(metric.value, 0), 100)}%`,
                     background: metric.color,
                   }}
                 />
               </div>
               <p className="metric-foot">
-                ● {tick > 0 ? 'Simulation updated' : 'Baseline simulation'}
+                ● {lastBackendUpdate ? 'Backend data' : 'Waiting for backend'}
               </p>
             </article>
           ))}
@@ -309,9 +536,7 @@ function App() {
                 {selectedDistrict && (
                   <div className="recommendation">
                     <strong>{selectedDistrict.name}</strong>
-                    <p>
-                      District selected. City traffic flow is {metrics[0].value}%.
-                    </p>
+                    <p>District selected. City traffic flow is {traffic}%.</p>
                     <button
                       className="reset-btn"
                       onClick={() => setSelectedDistrict(null)}
@@ -342,8 +567,8 @@ function App() {
                   <div>
                     <strong>Mobility watch</strong>
                     <p>
-                      Traffic flow is {metrics[0].value}%.{' '}
-                      {metrics[0].value < 40
+                      Traffic flow is {traffic}%.{' '}
+                      {traffic < 40
                         ? 'Congestion response may be needed.'
                         : 'Monitor signal timing in busy districts.'}
                     </p>
@@ -355,8 +580,8 @@ function App() {
                   <div>
                     <strong>Environment watch</strong>
                     <p>
-                      AQI reading is {metrics[1].value}.{' '}
-                      {metrics[1].value > 100
+                      AQI reading is {aqi}.{' '}
+                      {aqi > 100
                         ? 'Consider pollution-response measures.'
                         : 'Continue monitoring air quality trends.'}
                     </p>
@@ -368,10 +593,23 @@ function App() {
                   <div>
                     <strong>Energy watch</strong>
                     <p>
-                      Energy usage is {metrics[2].value}%.{' '}
-                      {metrics[2].value > 85
+                      Energy usage is {energy}%.{' '}
+                      {energy > 85
                         ? 'High demand detected.'
                         : 'Energy demand is within the demo monitoring range.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="insight">
+                  <span className="insight-icon">💧</span>
+                  <div>
+                    <strong>Water watch</strong>
+                    <p>
+                      Water reserves are {water}%.{' '}
+                      {water < 30
+                        ? 'Conservation measures may be needed.'
+                        : 'Water reserves are within the demo monitoring range.'}
                     </p>
                   </div>
                 </div>
@@ -396,10 +634,10 @@ function App() {
                 <div>
                   <h2>City trends</h2>
                   <p className="muted">
-                    Recent simulation readings · last {history.length} updates
+                    All readings · {history.length} saved records
                   </p>
                 </div>
-                <span className="map-tag">LIVE HISTORY</span>
+                <span className="map-tag">DATABASE HISTORY</span>
               </div>
 
               <div style={{ width: '100%', height: 300 }}>
@@ -437,7 +675,7 @@ function App() {
               </div>
 
               <p className="demo-note">
-                Readings are simulated locally. The chart keeps the latest 30 updates.
+                Chart displays all records returned by the backend.
               </p>
             </section>
 
@@ -445,9 +683,8 @@ function App() {
               <div className="panel-heading">
                 <div>
                   <h2>Simulation history</h2>
-                  <p className="muted">Most recent readings first</p>
+                  <p className="muted">All saved readings from the database</p>
                 </div>
-
                 <div className="top-actions">
                   <span className="map-tag">{history.length} RECORDS</span>
                   <button className="simulate-btn" onClick={exportCSV}>
@@ -476,7 +713,7 @@ function App() {
                   </thead>
                   <tbody>
                     {[...history].reverse().map(row => (
-                      <tr key={row.update}>
+                      <tr key={`${row.update}-${row.time}`}>
                         <td style={{ padding: '12px 10px' }}>#{row.update}</td>
                         <td style={{ padding: '12px 10px' }}>{row.time}</td>
                         <td style={{ padding: '12px 10px' }}>{row.traffic}%</td>
@@ -485,6 +722,13 @@ function App() {
                         <td style={{ padding: '12px 10px' }}>{row.water}%</td>
                       </tr>
                     ))}
+                    {history.length === 0 && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: '18px 10px' }}>
+                          No saved simulations yet. Click Run simulation to create one.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -499,8 +743,8 @@ function App() {
               <strong>City simulation</strong>
               <p className="muted">
                 {running
-                  ? 'New conditions are generated every 5 seconds.'
-                  : 'Simulation is paused.'}
+                  ? 'New readings are saved every 5 seconds.'
+                  : 'Automatic simulation is paused.'}
               </p>
             </div>
           </div>
@@ -510,10 +754,14 @@ function App() {
               className="reset-btn"
               onClick={() => setRunning(value => !value)}
             >
-              {running ? 'Ⅱ Pause' : '▶ Resume'}
+              {running ? 'Ⅱ Pause' : '▶ Start auto'}
             </button>
-            <button className="simulate-btn" onClick={simulate}>
-              ▶ Run simulation
+            <button
+              className="simulate-btn"
+              onClick={simulate}
+              disabled={busy}
+            >
+              {busy ? 'Saving...' : '▶ Run simulation'}
             </button>
           </div>
         </section>
