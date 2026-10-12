@@ -94,6 +94,3 @@ CityPulse AI is a smart city simulation and machine learning demonstration proje
 
 Demonstrate how a full-stack web application can combine an interactive dashboard, backend APIs, database connectivity, and machine learning predictions for a smart city digital twin concept.
 
-## Repository
-
-[CityPulse AI on GitHub](https://github.com/IshikaGaur318/citypulse-ai)
