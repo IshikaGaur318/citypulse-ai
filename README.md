@@ -1,22 +1,24 @@
-# CityPulse AI — Smart City Simulator
+# CityPulse AI — Full-Stack Smart City Intelligence Dashboard
 
-## Overview
-
-CityPulse AI is a smart city simulation dashboard that monitors urban indicators and visualizes changing city conditions.
+CityPulse AI is a full-stack smart city simulation and machine learning dashboard that visualizes urban indicators and generates predictions for traffic flow, air quality, energy usage, and water reserves.
 
 ## Features
 
-* Live simulated city metrics
+* Interactive smart city dashboard with urban metrics
 * Traffic, air quality, energy, and water indicators
-* Interactive dashboard navigation
+* Python machine learning predictions using Random Forest models
+* Node.js and Express backend API
+* React dashboard connected to backend prediction endpoints
+* Interactive charts and historical simulation trends
 * Selectable city districts
 * Rule-based alerts and AI-style insights
-* Historical trend charts using Recharts
-* Simulation history table
-* Pause, resume, reset, and manual simulation controls
-* Export simulation history to CSV
+* Simulation controls: pause, resume, reset, and manual updates
+* Simulation history and CSV export
+* MongoDB Atlas database integration/configuration
 
 ## Technology Stack
+
+### Frontend
 
 * React
 * Vite
@@ -24,37 +26,74 @@ CityPulse AI is a smart city simulation dashboard that monitors urban indicators
 * Recharts
 * CSS
 
+### Backend
+
+* Node.js
+* Express.js
+* REST API
+
+### AI / Machine Learning
+
+* Python
+* scikit-learn
+* Random Forest regression models
+
+### Database
+
+* MongoDB Atlas
+
+## Architecture
+
+1. The React frontend displays city metrics, charts, and prediction cards.
+2. The Node.js/Express backend provides API endpoints to the frontend.
+3. The Python machine learning model generates predictions for selected urban indicators.
+4. MongoDB Atlas provides database connectivity for supported application data.
+
 ## Run Locally
 
-1. Install Node.js.
+### 1. Start the backend
 
-2. Open a terminal in the project folder.
+Open a terminal in the project directory:
 
-3. Install dependencies:
+```bash
+cd server
+npm install
+node index.js
+```
 
-   ```bash
-   npm install
-   ```
+Configure the required environment variables in `server/.env` before starting the backend.
 
-4. Start the development server:
+### 2. Start the frontend
 
-   ```bash
-   npm run dev
-   ```
+Open a second terminal in the project root:
 
-5. Open the local URL shown in the terminal.
+```bash
+npm install
+npm run dev
+```
 
-## Data Notice
+Open the local URL shown by Vite.
 
-This project uses locally generated demonstration data. It is not connected to real city sensors or external AI services.
+### 3. Python environment
+
+Install the Python dependencies required by `ai_model.py` in your Python environment before running predictions.
+
+## Data and AI Notice
+
+CityPulse AI is a smart city simulation and machine learning demonstration project. Its dashboard can use simulated demonstration data, while the prediction endpoint runs the configured Python ML model. It is not currently presented as a live city-sensor monitoring system.
 
 ## Future Improvements
 
-* Integrate real-time sensor APIs
-* Add backend storage
-* Integrate an AI recommendation service
-* Add authentication and user roles
+* Integrate real-time city sensor APIs
+* Improve data persistence and historical storage
+* Add authentication and role-based access
+* Deploy the frontend, backend, and ML service online
+* Add prediction accuracy evaluation and monitoring
 
-## Project
+## Project Goal
 
-CityPulse AI — Smart City Digital Twin Concept
+Demonstrate how a full-stack web application can combine an interactive dashboard, backend APIs, database connectivity, and machine learning predictions for a smart city digital twin concept.
+
+## Repository
+
+[CityPulse AI on GitHub](https://github.com/IshikaGaur318/citypulse-ai)
